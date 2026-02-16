@@ -1,0 +1,63 @@
+# configs/config.yaml
+data:
+  dataset1_path: "dataset/dataset1.csv"
+  dataset2_path: "dataset/dataset2.csv"
+  dataset3_path: "dataset/dataset3.csv"
+  train_ratio: 0.70
+  val_ratio: 0.15
+  test_ratio: 0.15
+  random_seed: 42
+  stratify_by: ['fraud_flag', 'segment']
+
+feature_engineering:
+  scaling_method: 'robust'
+  log_transform_columns:
+    - annual_revenue_inr
+    - credit_limit_inr
+    - current_outstanding_inr
+    - avg_booking_value_inr
+    - max_single_booking_30d_inr
+  drop_columns:
+    - snapshot_date
+    - seasonal_period
+    - risk_score
+  cap_rules:
+    avg_customer_rating: 5.0
+
+intent_model:
+  type: 'ensemble'  # Changed from 'lightgbm' to 'ensemble' for recall boost
+  use_smote: true
+  tune_hyperparams: false  # Using optimized defaults for speed
+  recall_weight: 2.5  # Boost recall (higher = more recall focus)
+  focal_gamma: 2.0  # Focal loss parameter
+  threshold_mode: 'f2'  # Use F2 score (recall-focused) for threshold optimization
+  random_seed: 42
+  
+  # LightGBM-only params (legacy)
+  optuna_trials: 50
+  num_leaves: 31
+  max_depth: -1
+  learning_rate: 0.05
+  n_estimators: 500
+  min_child_samples: 20
+  subsample: 0.8
+  colsample_bytree: 0.8
+  reg_alpha: 0.1
+  reg_lambda: 0.1
+
+capacity_model:
+  type: 'cox_ph'
+  penalizer: 0.1
+  l1_ratio: 1.0
+  baseline_method: 'breslow'
+  capacity_horizon_days: 30
+  prediction_horizons: [7, 30, 90]
+  include_intent_score: true
+  penalizer_cv_range: [0.001, 0.01, 0.05, 0.1, 0.5, 1.0]
+
+decision_matrix:
+  block_intent_threshold: 0.60
+  approve_intent_threshold: 0.40
+  approve_capacity_threshold: 0.70
+  negotiate_capacity_min: 0.40
+  negotiate_capacity_max: 0.70
