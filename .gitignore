@@ -44,10 +44,10 @@ ENV/
 *~
 .DS_Store
 
-# Models & Data (large files)
-models/*.pkl
-models/*.joblib
-dataset/*.csv
+# Models & Data (large files) - models and datasets are now tracked
+# models/*.pkl
+# models/*.joblib
+# dataset/*.csv
 *.h5
 *.hdf5
 *.ckpt
