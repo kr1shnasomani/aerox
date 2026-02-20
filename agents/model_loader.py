@@ -45,7 +45,7 @@ class ModelLoader:
             logger.info("✓ Loaded capacity_cox.pkl")
             
         except Exception as e:
-            logger.warning(f"Could not load models: {e}. Will use mock scores.")
+            logger.info(f"PyTorch models not available ({e}). Using dataset-based scoring instead.")
     
     def _load_dataset(self):
         """Load company dataset"""
@@ -59,9 +59,9 @@ class ModelLoader:
     def score_company(self, company_id):
         """
         Score a company using real models or fallback to mock data
-        
+
         Returns:
-            dict with keys: intent_score, capacity_score, pd_7d, pd_14d, pd_30d, 
+            dict with keys: intent_score, capacity_score, pd_7d, pd_14d, pd_30d,
                            risk_category, company_data
         """
         # Check for test company IDs
@@ -69,14 +69,14 @@ class ModelLoader:
             return self._enrich_scores(GREEN_FLAG_SCORES, company_id)
         elif company_id == "IN-TRV-000999":  # Red flag
             return self._enrich_scores(RED_FLAG_SCORES, company_id)
-        
-        # Try real model scoring
-        if self.intent_model and self.capacity_model and self.dataset1 is not None:
+
+        # Try dataset-based scoring (even without ML models)
+        if self.dataset1 is not None:
             try:
-                return self._real_model_score(company_id)
+                return self._dataset_based_score(company_id)
             except Exception as e:
-                logger.warning(f"Real scoring failed for {company_id}: {e}. Using mock.")
-        
+                logger.warning(f"Dataset scoring failed for {company_id}: {e}. Using mock.")
+
         # Fallback to mock
         return self._enrich_scores(MOCK_ML_SCORES, company_id)
     
@@ -151,6 +151,82 @@ class ModelLoader:
             "external_data": MOCK_EXTERNAL_DATA  # Always mock for external
         }
     
+    def _dataset_based_score(self, company_id):
+        """Score company using dataset features (without ML models)"""
+        # Find company in dataset
+        company_row = self.dataset1[self.dataset1['company_id'] == company_id]
+
+        if company_row.empty:
+            raise ValueError(f"Company {company_id} not found in dataset")
+
+        company_row = company_row.iloc[0]
+
+        # Calculate capacity score from features
+        capacity_score = self._estimate_capacity_score(company_row)
+
+        # Estimate intent score from fraud indicators
+        intent_score = self._estimate_intent_score(company_row)
+
+        # Estimate PD from capacity score
+        pd_7d = min(0.50, max(0.001, (1 - capacity_score) * 0.03))
+        pd_14d = min(0.60, pd_7d * 3)
+        pd_30d = min(0.70, pd_7d * 6)
+
+        # Determine risk category
+        risk_category = self._categorize_risk(intent_score, capacity_score)
+
+        # Build company data from row
+        company_data = {
+            "segment": company_row.get('segment', 'small_medium'),
+            "credit_utilization": float(company_row.get('credit_utilization', 0.5)),
+            "on_time_payment_rate": float(company_row.get('on_time_payment_rate', 0.8)),
+            "avg_late_payment_days": float(company_row.get('avg_late_payment_days', 5)),
+            "chargeback_rate": float(company_row.get('chargeback_rate', 0.01)),
+            "business_age_months": int(company_row.get('business_age_months', 24)),
+            "years_with_platform": float(company_row.get('years_with_platform', 1.5))
+        }
+
+        return {
+            "intent_score": float(intent_score),
+            "capacity_score": float(capacity_score),
+            "pd_7d": float(pd_7d),
+            "pd_14d": float(pd_14d),
+            "pd_30d": float(pd_30d),
+            "risk_category": risk_category,
+            "company_data": company_data,
+            "external_data": MOCK_EXTERNAL_DATA
+        }
+
+    def _estimate_intent_score(self, company_row):
+        """Estimate fraud intent from key indicators"""
+        # Key fraud signals
+        chargeback_rate = company_row.get('chargeback_rate', 0.01)
+        dispute_count = company_row.get('dispute_count_90d', 0)
+        fraud_flag = company_row.get('fraud_flag', 0)
+        cancellation_rate = company_row.get('cancellation_rate', 0.1)
+        refund_request_rate = company_row.get('refund_request_rate', 0.1)
+
+        # Weighted scoring
+        intent_score = 0.0
+
+        # Fraud flag is strongest signal
+        if fraud_flag == 1:
+            intent_score += 0.6
+
+        # Chargeback rate (normalize: 0.08 = high, 0.001 = low)
+        intent_score += min(0.3, chargeback_rate * 3.75)  # 0.08 * 3.75 = 0.30
+
+        # Dispute count (normalize: 4+ = high)
+        intent_score += min(0.15, dispute_count * 0.0375)  # 4 * 0.0375 = 0.15
+
+        # Cancellation rate (high cancellations can indicate fraud)
+        intent_score += min(0.1, cancellation_rate * 0.25)
+
+        # Refund request rate
+        intent_score += min(0.1, refund_request_rate * 0.25)
+
+        return max(0.01, min(0.99, intent_score))
+
     def _estimate_capacity_score(self, company_row):
         """Estimate capacity score from Cox model partial hazard"""
         try:
@@ -159,11 +235,11 @@ class ModelLoader:
             # Use credit_utilization and payment behavior as proxy
             credit_util = company_row.get('credit_utilization', 0.5)
             on_time_rate = company_row.get('on_time_payment_rate', 0.8)
-            
+
             # Simple heuristic: capacity = (1 - credit_util) * on_time_rate
             capacity_score = (1 - credit_util) * on_time_rate
             return max(0.1, min(0.95, capacity_score))
-        
+
         except Exception:
             return 0.55  # Default moderate capacity
     
